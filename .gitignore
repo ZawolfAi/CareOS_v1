@@ -38,3 +38,10 @@ tempCodeRunnerFile.py
 # Local uploaded clinical documents and recordings may contain PHI
 /storage/uploads/
 /backend/storage/uploads/
+backend/.venv/
+backend/__pycache__/
+backend/*.pyc
+node_modules/
+.env
+backend/careos.db
+backend/alembic.ini

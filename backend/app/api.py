@@ -1362,7 +1362,7 @@ async def create_document(patient_id: UUID, request: DocumentInput, user=Depends
     document = PatientDocument(organization_id=user.organization_id, patient_id=patient_id, filename=request.filename, storage_key=storage_key, download_url=download_url, content_type=request.content_type, size_bytes=len(content), ocr_status="processing"); session.add(document); await session.flush()
     if storage_key:
         document.download_url = f"{get_settings().app_url}{get_settings().api_prefix}/patients/{patient_id}/documents/{document.id}/download"
-    document.extracted_text = ocr_provider.extract(request.filename); document.ocr_status = "completed"; await write_audit(session, user, "document.ocr_completed", str(document.id)); await session.commit()
+    document.extracted_text = await ocr_provider.extract(request.filename, content); document.ocr_status = "completed"; await write_audit(session, user, "document.ocr_completed", str(document.id)); await session.commit()
     return {"id": document.id, "filename": document.filename, "ocr_status": document.ocr_status, "review_status": document.review_status, "extracted_text": document.extracted_text, "download_url": document.download_url, "provider": "sandbox"}
 
 

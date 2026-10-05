@@ -96,22 +96,24 @@ class RagProvider:
 
 
 class OcrProvider:
-    def extract(self, filename: str) -> str:
-        lowered = (filename or "").lower()
-        if "ecg" in lowered or "cardio" in lowered:
-            return (
-                "ECG review: sinus rhythm identified with minor ST-T changes. "
-                "No acute ischemic pattern was detected. Follow-up ECG in 14 days with cardiology review recommended."
-            )
-        if "lab" in lowered or "report" in lowered or "result" in lowered:
-            return (
-                "Lab report: troponin 0.18 ng/mL, creatinine 0.9 mg/dL, and eGFR 88 mL/min. "
-                "Mild elevation warrants repeat measurement and clinical review within 72 hours."
-            )
-        return (
-            "Document intake summary: key clinical findings were extracted and reviewed for scope. "
-            "No acute risk marker was identified; clinician validation and follow-up review are recommended."
-        )
+    async def extract(self, filename: str, content: bytes) -> str:
+        if not content:
+            return "No content provided."
+        try:
+            url = "http://localhost:8000/api/v1/process"
+            files = {"file": (filename, content, "application/octet-stream")}
+            
+            async with httpx.AsyncClient(timeout=300) as client:
+                response = await client.post(url, files=files)
+                response.raise_for_status()
+                result = response.json()
+            
+            extracted = result.get("extracted_data", {})
+            import json
+            return json.dumps(extracted, ensure_ascii=False, indent=2)
+            
+        except Exception as e:
+            return f"ZaWolf AI Extraction Failed: {str(e)}"
 
 
 class NotificationProvider:
