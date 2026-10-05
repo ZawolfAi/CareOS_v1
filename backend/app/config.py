@@ -9,7 +9,7 @@ DEFAULT_DB_PATH = BACKEND_ROOT / "careos.db"
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(enable_decoding=False, env_file=BACKEND_ROOT / ".env")
+    model_config = SettingsConfigDict(enable_decoding=False, env_file=BACKEND_ROOT / ".env", extra="ignore")
     app_env: str = "development"
     app_name: str = "careos-api"
     deployment_name: str = "careos-local"
@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     speech_to_text_diarization: bool = True
     ai_provider: str = "unconfigured"
     ai_api_url: str = ""
+    ai_base_url: str = ""
     ai_api_key: str = ""
     ai_model: str = ""
     audio_retention_days: int = 30

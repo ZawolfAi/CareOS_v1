@@ -50,6 +50,8 @@ from .rbac import ROLE_PERMISSIONS, can_access_patient_scope, can_access_section
 from .integrations import get_speech_to_text_provider, ocr_provider, rag_provider, summary_provider
 from .models import Appointment, AudioFile, AuditEvent, AuthSession, CarePlan, ClinicalNote, ClinicalNoteVersion, Encounter, Notification, Organization, Patient, PatientDocument, PatientMessage, PatientPortalAccount, PatientPortalDocument, PatientPortalSession, PasswordResetToken, PatientProfile, Permission, ReminderJob, Role, RolePermission, SSOConfiguration, Task, TeamInvite, Transcript, TranscriptVersion, TranscriptionJob, User, UserRole
 
+from typing import Any
+
 router = APIRouter()
 bearer = HTTPBearer(auto_error=False)
 _guest_chat_windows: dict[str, tuple[float, int]] = {}
@@ -126,10 +128,15 @@ class NoteUpdateInput(BaseModel):
 class RagQuestion(BaseModel):
     patient_id: UUID
     question: str = Field(min_length=3, max_length=2000)
+    conversation_id: str | None = None
+    orchestrator_state: dict[str, Any] | None = None
 
 
 class GeneralChatInput(BaseModel):
     message: str = Field(min_length=1, max_length=2000)
+    patient_id: UUID | None = None
+    conversation_id: str | None = None
+    orchestrator_state: dict[str, Any] | None = None
 
 
 class GuestVoiceInput(BaseModel):
@@ -1273,8 +1280,48 @@ async def generate_note_document(note_id: UUID, user=Depends(require_permission(
 
 @router.post("/assistant/query", tags=["ai"])
 async def assistant_query(request: RagQuestion, user=Depends(require_permission("patient.read")), session: AsyncSession = Depends(get_session)) -> dict[str, object]:
+    from app.ai.booking.tools import BookingTools
+    from app.ai.followup.tools import FollowUpTools
+    from app.ai.orchestrator import CareOSOrchestrator, OrchestratorState
+
     await ensure_patient_access(session, request.patient_id, user, "read")
-    result = await rag_provider.answer(request.question); await write_audit(session, user, "assistant.queried", str(request.patient_id)); await session.commit(); return result
+    booking_tools = BookingTools(session=session, user=user)
+    followup_tools = FollowUpTools(session=session, user=user)
+
+    existing_state = None
+    if request.orchestrator_state:
+        try:
+            existing_state = OrchestratorState.model_validate(request.orchestrator_state)
+        except Exception:
+            existing_state = None
+
+    orchestrator = CareOSOrchestrator()
+    conv_id = request.conversation_id or (existing_state.conversation_id if existing_state else str(uuid4()))
+
+    resp = await orchestrator.process(
+        user_text=request.question,
+        patient_id=str(request.patient_id),
+        conversation_id=conv_id,
+        state=existing_state,
+        booking_tools=booking_tools,
+        followup_tools=followup_tools,
+    )
+    await write_audit(session, user, "assistant.queried", str(request.patient_id))
+    await session.commit()
+    return {
+        "answer": resp.message or (resp.error if resp.status == "failed" else ""),
+        "intent": resp.intent.value if hasattr(resp.intent, "value") else str(resp.intent),
+        "status": resp.status,
+        "active_agent": resp.active_agent,
+        "conversation_id": resp.conversation_id,
+        "patient_id": resp.patient_id,
+        "orchestrator_state": resp.orchestrator_state.model_dump() if resp.orchestrator_state else None,
+        "result": resp.result,
+        "error": resp.error,
+        "sources": [],
+        "confidence": 0.0,
+        "provider": get_settings().ai_provider,
+    }
 
 
 @router.post("/assistant/guest-chat", tags=["ai"])
@@ -1340,10 +1387,47 @@ async def guest_assistant_voice(payload: GuestVoiceInput, request: Request) -> d
 
 @router.post("/assistant/chat", tags=["ai"])
 async def general_assistant_chat(request: GeneralChatInput, user=Depends(current_user), session: AsyncSession = Depends(get_session)) -> dict[str, object]:
-    result = await rag_provider.answer_general(request.message)
+    from app.ai.booking.tools import BookingTools
+    from app.ai.followup.tools import FollowUpTools
+    from app.ai.orchestrator import CareOSOrchestrator, OrchestratorState
+
+    booking_tools = BookingTools(session=session, user=user)
+    followup_tools = FollowUpTools(session=session, user=user)
+
+    existing_state = None
+    if request.orchestrator_state:
+        try:
+            existing_state = OrchestratorState.model_validate(request.orchestrator_state)
+        except Exception:
+            existing_state = None
+
+    orchestrator = CareOSOrchestrator()
+    patient_id_str = str(request.patient_id) if request.patient_id else (str(existing_state.patient_id) if existing_state and existing_state.patient_id else None)
+    conv_id = request.conversation_id or (existing_state.conversation_id if existing_state else str(uuid4()))
+
+    resp = await orchestrator.process(
+        user_text=request.message,
+        patient_id=patient_id_str,
+        conversation_id=conv_id,
+        state=existing_state,
+        booking_tools=booking_tools,
+        followup_tools=followup_tools,
+    )
     await write_audit(session, user, "assistant.general_chat", "workspace")
     await session.commit()
-    return result
+    return {
+        "answer": resp.message or (resp.error if resp.status == "failed" else ""),
+        "intent": resp.intent.value if hasattr(resp.intent, "value") else str(resp.intent),
+        "status": resp.status,
+        "active_agent": resp.active_agent,
+        "conversation_id": resp.conversation_id,
+        "patient_id": resp.patient_id,
+        "orchestrator_state": resp.orchestrator_state.model_dump() if resp.orchestrator_state else None,
+        "result": resp.result,
+        "error": resp.error,
+        "sources": [],
+        "provider": get_settings().ai_provider,
+    }
 
 
 @router.post("/patients/{patient_id}/documents", status_code=201, tags=["documents"])
